@@ -4,6 +4,7 @@ const Patient = require('../models/patientModel');
 const Doctor = require('../models/doctorModel');
 const { computeEligibility, validateDonorRegistration } = require('../services/eligibilityService');
 const logger = require('../utils/logger');
+const { updateTransfusionPrediction, getPredictionStatus: getPatientPrediction } = require('../utils/aiPrediction');
 
 // Helper validation functions
 const validateDonorAge = (dob) => {
@@ -513,6 +514,7 @@ const getProfile = async (req, res) => {
   }
 };
 
+
 // @route   PUT /api/auth/profile
 // @desc    Update user profile
 // @access  Private
@@ -527,7 +529,11 @@ const updateProfile = async (req, res) => {
       // Health metrics
       heightCm,
       weightKg,
-      medicalReports
+      medicalReports,
+      // Patient specifically
+      transfusionHistory,
+      currentHb,
+      comorbidities
     } = req.body;
 
     // Build update object
@@ -577,12 +583,25 @@ const updateProfile = async (req, res) => {
       if (heightCm) patientUpdate.heightCm = heightCm;
       if (weightKg) patientUpdate.weightKg = weightKg;
       if (medicalReports) patientUpdate.medicalReports = medicalReports;
+      if (transfusionHistory) patientUpdate.transfusionHistory = transfusionHistory;
+      if (currentHb) {
+        patientUpdate.currentHb = currentHb;
+        patientUpdate.currentHbDate = new Date();
+      }
+      if (comorbidities) patientUpdate.comorbidities = comorbidities;
 
-      await Patient.findOneAndUpdate(
+      const patient = await Patient.findOneAndUpdate(
         { user: user._id },
         { $set: patientUpdate },
         { new: true, runValidators: true }
       );
+
+      // Trigger AI prediction asynchronously
+      if (patient) {
+        updateTransfusionPrediction(patient._id).catch(err => 
+          console.error('AI Prediction background error:', err.message)
+        );
+      }
     } else if (user.role === 'doctor') {
       const doctorUpdate = {};
       const { specialization, qualification, experience, hospital, availability, consultationHours } = req.body;
@@ -617,10 +636,99 @@ const updateProfile = async (req, res) => {
   }
 };
 
+
+// @route   GET /api/auth/prediction-status
+// @desc    Get current prediction status for logged-in patient
+// @access  Private (Patient only)
+const getPredictionStatus = async (req, res) => {
+  try {
+    if (req.user.role !== 'patient') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only patients can access prediction status',
+      });
+    }
+
+    const patient = await Patient.findOne({ user: req.user._id });
+    
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient profile not found',
+      });
+    }
+
+    const result = await getPatientPrediction(patient._id);
+    
+    if (!result.success) {
+      return res.status(404).json(result);
+    }
+
+    res.status(200).json({
+      success: true,
+      data: result.prediction,
+    });
+  } catch (error) {
+    console.error('Get prediction status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
+// @route   POST /api/auth/trigger-prediction
+// @desc    Manually trigger prediction update for logged-in patient
+// @access  Private (Patient only)
+const triggerPrediction = async (req, res) => {
+  try {
+    if (req.user.role !== 'patient') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only patients can trigger predictions',
+      });
+    }
+
+    const patient = await Patient.findOne({ user: req.user._id });
+    
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient profile not found',
+      });
+    }
+
+    const result = await updateTransfusionPrediction(patient._id);
+    
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.error || 'Failed to generate prediction',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Prediction updated successfully',
+      data: result.prediction,
+    });
+  } catch (error) {
+    console.error('Trigger prediction error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
   getProfile,
   updateProfile,
+  getPredictionStatus,
+  triggerPrediction,
 };
 

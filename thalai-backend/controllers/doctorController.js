@@ -250,10 +250,87 @@ const getDashboardStats = async (req, res) => {
   }
 };
 
+const { updateTransfusionPrediction } = require('../utils/aiPrediction');
+
+// @route   PUT /api/doctor/patients/:patientId/medical-data
+// @desc    Update patient's medical data (transfusion history, Hb, etc.)
+// @access  Private (Doctor only)
+const updatePatientMedicalData = async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const { transfusionHistory, currentHb, comorbidities, medicalReports } = req.body;
+
+    const doctor = await Doctor.findOne({ user: req.user._id });
+
+    if (!doctor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Doctor profile not found',
+      });
+    }
+
+    // Check if patient is assigned to this doctor
+    const assignment = doctor.assignedPatients.find(
+      (ap) => ap.patient.toString() === patientId && ap.status === 'active'
+    );
+
+    if (!assignment) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this patient',
+      });
+    }
+
+    // Update patient details
+    const patientFields = {};
+    if (transfusionHistory) patientFields.transfusionHistory = transfusionHistory;
+    if (currentHb) {
+      patientFields.currentHb = currentHb;
+      patientFields.currentHbDate = new Date();
+    }
+    if (comorbidities) patientFields.comorbidities = comorbidities;
+    if (medicalReports) patientFields.medicalReports = medicalReports;
+
+    const patient = await Patient.findByIdAndUpdate(
+      patientId,
+      { $set: patientFields },
+      { new: true, runValidators: true }
+    );
+
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient not found',
+      });
+    }
+
+    // Trigger AI prediction
+    updateTransfusionPrediction(patient._id).catch(err => 
+      console.error('AI Prediction error in doctor update:', err.message)
+    );
+
+    logger.info('Patient medical data updated by doctor', { doctorId: req.user._id, patientId });
+
+    res.status(200).json({
+      success: true,
+      message: 'Patient medical data updated successfully',
+      data: patient,
+    });
+  } catch (error) {
+    console.error('Update patient medical data error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getAssignedPatients,
   getPatientDetails,
   updatePatientNotes,
+  updatePatientMedicalData,
   getDoctorProfile,
   getDashboardStats,
 };

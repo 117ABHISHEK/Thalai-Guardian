@@ -16,7 +16,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+
+# CORS Configuration - Allow multiple origins
+allowed_origins = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    os.getenv('FRONTEND_URL'),
+    os.getenv('BACKEND_URL'),
+]
+allowed_origins = [origin for origin in allowed_origins if origin]
+
+CORS(app, origins=allowed_origins, supports_credentials=True)
 
 # Global variables for model
 model = None
@@ -82,34 +92,66 @@ def rule_based_prediction(history, last_hb, age, weight_kg, current_date):
             'method': 'rule_based',
         }
     
-    # Calculate mean interval from history
     intervals = []
     for i in range(1, len(sorted_history)):
         prev_date = datetime.strptime(sorted_history[i-1]['date'], '%Y-%m-%d')
         curr_date = datetime.strptime(sorted_history[i]['date'], '%Y-%m-%d')
         interval = (curr_date - prev_date).days
-        intervals.append(interval)
+        if interval > 0:  # Ignore same-day or invalid intervals
+            intervals.append(interval)
     
-    mean_interval = np.mean(intervals)
+    if len(intervals) > 0:
+        mean_interval = int(np.mean(intervals))
+        # Adjust based on recent Hb
+        if last_hb < 8.0:
+            mean_interval = max(14, int(mean_interval * 0.8))  # Shorter interval for low Hb
+        elif last_hb > 10.0:
+            mean_interval = min(35, int(mean_interval * 1.2))  # Longer interval for higher Hb
+        
+        last_date = datetime.strptime(sorted_history[-1]['date'], '%Y-%m-%d')
+        next_date = last_date + timedelta(days=mean_interval)
+        
+        # Calculate urgency based on days until next transfusion
+        days_until = (next_date - datetime.strptime(current_date, '%Y-%m-%d')).days
+        if days_until <= 3:
+            urgency = 'urgent'
+        elif days_until <= 7:
+            urgency = 'soon'
+        else:
+            urgency = 'normal'
+        
+        return {
+            'predictedNextDate': next_date.strftime('%Y-%m-%d'),
+            'confidence': min(0.75, 0.5 + (len(intervals) * 0.05)),  # Higher confidence with more data
+            'explanation': f'Rule-based prediction: {mean_interval}-day average interval from {len(intervals)} previous transfusions. Current Hb: {last_hb:.1f} g/dL',
+            'method': 'rule_based',
+            'urgency': urgency,
+            'factors': {
+                'avgInterval': mean_interval,
+                'lastHb': last_hb,
+                'historyCount': len(sorted_history)
+            }
+        }
     
-    # Adjust based on last Hb
-    if last_hb < 8.0:
-        adjustment = -3  # Need sooner transfusion
-    elif last_hb > 10.0:
-        adjustment = 3  # Can wait longer
-    else:
-        adjustment = 0
-    
-    predicted_interval = max(7, mean_interval + adjustment)  # Minimum 7 days
-    
+    # Fallback: single transfusion case
+    interval_days = 21
     last_date = datetime.strptime(sorted_history[-1]['date'], '%Y-%m-%d')
-    next_date = last_date + timedelta(days=int(predicted_interval))
+    next_date = last_date + timedelta(days=interval_days)
+    
+    days_until = (next_date - datetime.strptime(current_date, '%Y-%m-%d')).days
+    if days_until <= 3:
+        urgency = 'urgent'
+    elif days_until <= 7:
+        urgency = 'soon'
+    else:
+        urgency = 'normal'
     
     return {
         'predictedNextDate': next_date.strftime('%Y-%m-%d'),
-        'confidence': 0.75,
-        'explanation': f'Rule-based prediction: {int(predicted_interval)}-day interval (mean: {mean_interval:.1f} days, adjusted for Hb {last_hb:.1f} g/dL)',
+        'confidence': 0.5,
+        'explanation': f'Rule-based prediction: Default {interval_days}-day interval (limited history)',
         'method': 'rule_based',
+        'urgency': urgency,
     }
 
 def prepare_features(history, last_hb, age, weight_kg, comorbidities, current_date):
@@ -203,6 +245,72 @@ def model_info_endpoint():
         'metrics': model_info.get('metrics'),
         'feature_importance': model_info.get('feature_importance'),
     })
+
+@app.route('/predict-availability', methods=['POST'])
+def predict_availability():
+    """
+    Predict donor availability score based on history and demographics
+    
+    Request Body:
+    {
+        "donorId": "donor_123",
+        "age": 30,
+        "donationFrequency": 5,
+        "lastDonationDate": "2023-11-20",
+        "region": "Maharashtra",
+        "healthFlags": []
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        # Extract data with defaults
+        age = int(data.get('age', 30))
+        freq = int(data.get('donationFrequency', 0))
+        last_date_str = data.get('lastDonationDate')
+        
+        # Base score
+        score = 60.0
+        
+        # Frequency factor (more experienced donors are more reliable)
+        score += min(freq * 2.5, 20.0)
+        
+        # Age factor (optimal age range 25-45)
+        if 25 <= age <= 45:
+            score += 10.0
+        elif age > 45:
+            score += 5.0
+        
+        # Recency factor
+        if last_date_str:
+            try:
+                last_date = datetime.strptime(last_date_str.split('T')[0], '%Y-%m-%d')
+                days_since = (datetime.now() - last_date).days
+                
+                if days_since < 56:
+                    score = 10.0  # Not eligible yet
+                elif 56 <= days_since <= 120:
+                    score += 10.0  # Optimal window
+                elif days_since > 120:
+                    score -= min((days_since - 120) / 30, 15.0)  # Declining interest
+            except:
+                pass
+                
+        # Cap score between 0 and 100
+        final_score = max(0, min(100.0, score))
+        
+        return jsonify({
+            'donorId': data.get('donorId'),
+            'availabilityScore': final_score,
+            'method': 'heuristic',
+            'explanation': f'Availability score {final_score:.1f} calculated based on age, frequency ({freq}), and donation history.'
+        })
+        
+    except Exception as e:
+        print(f"Availability prediction error: {e}")
+        return jsonify({
+            'error': f'Prediction failed: {str(e)}'
+        }), 500
 
 @app.route('/predict-next-transfusion', methods=['POST'])
 def predict_next_transfusion():

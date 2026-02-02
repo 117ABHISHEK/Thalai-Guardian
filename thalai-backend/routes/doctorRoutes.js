@@ -6,6 +6,7 @@ const {
   getAssignedPatients,
   getPatientDetails,
   updatePatientNotes,
+  updatePatientMedicalData,
   getDoctorProfile,
   getDashboardStats,
 } = require('../controllers/doctorController');
@@ -25,6 +26,10 @@ router.get('/patients/:patientId', getPatientDetails);
 // @route   PUT /api/doctor/patients/:patientId/notes
 // @desc    Add or update notes for a patient
 router.put('/patients/:patientId/notes', updatePatientNotes);
+
+// @route   PUT /api/doctor/patients/:patientId/medical-data
+// @desc    Update medical data for a patient
+router.put('/patients/:patientId/medical-data', updatePatientMedicalData);
 
 // @route   GET /api/doctor/profile
 // @desc    Get doctor's own profile

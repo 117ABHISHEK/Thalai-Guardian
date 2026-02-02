@@ -1,5 +1,6 @@
 const Appointment = require('../models/appointmentModel');
 const User = require('../models/userModel');
+const { sendAppointmentNotification } = require('../services/notificationService');
 
 /**
  * @desc    Create new appointment
@@ -50,6 +51,9 @@ const createAppointment = async (req, res) => {
       reason,
       status: 'pending' 
     });
+
+    // Notify doctor
+    await sendAppointmentNotification(doctorId, appointment, 'requested');
 
     res.status(201).json({
       success: true,
@@ -224,6 +228,18 @@ const updateAppointmentStatus = async (req, res) => {
     if (notes) appointment.notes = notes;
 
     await appointment.save();
+
+    // Trigger Notifications based on status change
+    if (status === 'scheduled') {
+      await sendAppointmentNotification(appointment.user, appointment, 'scheduled');
+    } else if (status === 'completed_pending') {
+      await sendAppointmentNotification(appointment.user, appointment, 'completed_pending');
+    } else if (status === 'completed') {
+      await sendAppointmentNotification(appointment.doctor, appointment, 'completed');
+    } else if (status === 'cancelled') {
+      const targetId = isDoctor ? appointment.user : appointment.doctor;
+      await sendAppointmentNotification(targetId, appointment, 'cancelled');
+    }
 
     res.status(200).json({
       success: true,

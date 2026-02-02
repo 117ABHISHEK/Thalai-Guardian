@@ -1,6 +1,7 @@
 const Request = require('../models/requestModel');
 const MatchLog = require('../models/matchLogModel');
-const { findMatchingDonors } = require('../utils/donorMatching');
+const Donor = require('../models/donorModel');
+const { processRequestMatching } = require('../services/matchService');
 const notificationService = require('../services/notificationService');
 
 /**
@@ -19,11 +20,8 @@ const findMatches = async (req, res) => {
       });
     }
 
-    // Get the request
-    const request = await Request.findById(requestId).populate(
-      'patientId',
-      'name email bloodGroup'
-    );
+    // Get the request to check permissions
+    const request = await Request.findById(requestId);
 
     if (!request) {
       return res.status(404).json({
@@ -34,7 +32,7 @@ const findMatches = async (req, res) => {
 
     // Check if user has permission
     if (
-      request.patientId._id.toString() !== req.user._id.toString() &&
+      request.patientId.toString() !== req.user._id.toString() &&
       req.user.role !== 'admin'
     ) {
       return res.status(403).json({
@@ -43,53 +41,24 @@ const findMatches = async (req, res) => {
       });
     }
 
-    // Find matching donors
-    const matches = await findMatchingDonors(request, { limit: 20 });
+    // Use service to find and process matches
+    const matches = await processRequestMatching(requestId);
 
-    // Save match logs
-    const matchLogs = await Promise.all(
-      matches.map((match) =>
-        MatchLog.create({
-          requestId: request._id,
-          donorId: match.donorId,
-          matchScore: match.matchScore,
-          scoreBreakdown: match.scoreBreakdown,
-          status: 'pending',
-        })
-      )
-    );
-
-    // Send notifications to top 3 donors
-    if (matches.length > 0) {
-      const topDonors = matches.slice(0, 3);
-      for (const match of topDonors) {
-        try {
-          await notificationService.sendDonorMatchNotification(
-            match.donorId,
-            request._id,
-            match.matchScore
-          );
-        } catch (error) {
-          console.error('Error sending notification:', error);
-        }
-      }
+    if (matches === null) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error processing matches',
+      });
     }
 
     res.status(200).json({
       success: true,
-      message: 'Matches found successfully',
+      message: 'Matches found and donors notified',
       data: {
-        request: {
-          id: request._id,
-          bloodGroup: request.bloodGroup,
-          urgency: request.urgency,
-          unitsRequired: request.unitsRequired,
-        },
         matches: matches.map((match) => ({
           donorId: match.donorId,
+          userId: match.donor?._id,
           name: match.donor?.name,
-          email: match.donor?.email,
-          phone: match.donor?.phone,
           bloodGroup: match.donor?.bloodGroup,
           matchScore: match.matchScore,
           scoreBreakdown: match.scoreBreakdown,
@@ -161,8 +130,120 @@ const getTopMatches = async (req, res) => {
   }
 };
 
+/**
+ * @route   GET /api/match/my-matches
+ * @desc    Get all match requests for the logged-in donor
+ * @access  Private (Donor only)
+ */
+const getMyMatches = async (req, res) => {
+  try {
+    const donor = await Donor.findOne({ user: req.user._id });
+
+    if (!donor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Donor profile not found',
+      });
+    }
+
+    const matches = await MatchLog.find({ donorId: donor._id })
+      .populate({
+        path: 'requestId',
+        populate: {
+          path: 'patientId',
+          select: 'name email phone address',
+        },
+      })
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        matches: matches.map(match => ({
+          matchId: match._id,
+          request: match.requestId,
+          matchScore: match.matchScore,
+          status: match.status,
+          createdAt: match.createdAt,
+        })),
+        total: matches.length,
+      },
+    });
+  } catch (error) {
+    console.error('Get my matches error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route   PUT /api/match/update-status/:matchId
+ * @desc    Update match status (accept/reject)
+ * @access  Private (Donor only)
+ */
+const updateMatchStatus = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+    const { status, notes } = req.body;
+
+    if (!['accepted', 'rejected'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Must be accepted or rejected',
+      });
+    }
+
+    const donor = await Donor.findOne({ user: req.user._id });
+    if (!donor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Donor profile not found',
+      });
+    }
+
+    const match = await MatchLog.findOne({ _id: matchId, donorId: donor._id });
+
+    if (!match) {
+      return res.status(404).json({
+        success: false,
+        message: 'Match log not found or access denied',
+      });
+    }
+
+    match.status = status;
+    match.notes = notes || match.notes;
+    match.respondedAt = new Date();
+    await match.save();
+
+    // If accepted, notify the patient
+    if (status === 'accepted') {
+      notificationService.sendMatchAcceptedNotification(match._id).catch(err => 
+        console.error('Failed to send match accepted notification:', err.message)
+      );
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Match successfully ${status}`,
+      data: match,
+    });
+  } catch (error) {
+    console.error('Update match status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   findMatches,
   getTopMatches,
+  getMyMatches,
+  updateMatchStatus,
 };
 
