@@ -81,7 +81,7 @@ const ChatbotWidget = () => {
       setTimeout(() => handleAction(actionTrigger), 600);
       return;
     }
-    
+
     setLoading(true);
     try {
       const response = await api.post('/chatbot/ask', { message: userMessage, sessionId });
@@ -111,37 +111,36 @@ const ChatbotWidget = () => {
       </button>
 
       {isOpen && (
-        <div className="fixed bottom-8 right-8 w-[420px] h-[700px] bg-white rounded-[40px] shadow-2xl flex flex-col z-100 overflow-hidden animate-reveal border border-slate-100">
+        <div className="fixed bottom-8 right-8 w-[420px] h-[700px] bg-white rounded-[40px] shadow-2xl flex flex-col z-[100] overflow-hidden animate-reveal border border-slate-100">
           {/* AI Header */}
           <div className="bg-slate-900 p-6 flex justify-between items-center relative overflow-hidden">
-             <div className="absolute top-0 right-0 p-8 opacity-10">
-                <Command className="w-24 h-24 text-white" />
-             </div>
-             <div className="flex items-center gap-4 relative z-10">
-                <div className="w-12 h-12 bg-sky-500 rounded-2xl flex items-center justify-center shadow-lg shadow-sky-500/20">
-                   <Bot className="w-7 h-7 text-white" />
+            <div className="absolute top-0 right-0 p-8 opacity-10">
+              <Command className="w-24 h-24 text-white" />
+            </div>
+            <div className="flex items-center gap-4 relative z-10">
+              <div className="w-12 h-12 bg-sky-500 rounded-2xl flex items-center justify-center shadow-lg shadow-sky-500/20">
+                <Bot className="w-7 h-7 text-white" />
+              </div>
+              <div>
+                <h3 className="text-white font-display font-black tracking-tight leading-none mb-1.5">Intelligence Core</h3>
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                  <span className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em]">Neural Link Active</span>
                 </div>
-                <div>
-                  <h3 className="text-white font-display font-black tracking-tight leading-none mb-1.5">Intelligence Core</h3>
-                  <div className="flex items-center gap-2">
-                     <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-                     <span className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em]">Neural Link Active</span>
-                  </div>
-                </div>
-             </div>
-             <div className="flex items-center gap-2 relative z-10">
-                <button onClick={() => setMessages([{ type: 'bot', text: "Memory banks cleared. Resetting session context.", timestamp: new Date() }])} className="p-2.5 bg-white/5 hover:bg-white/10 rounded-xl transition-all"><RefreshCw className="w-4 h-4 text-white" /></button>
-                <button onClick={() => setIsOpen(false)} className="p-2.5 bg-white/5 hover:bg-white/10 rounded-xl transition-all"><Minus className="w-4 h-4 text-white" /></button>
-             </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 relative z-10">
+              <button onClick={() => setMessages([{ type: 'bot', text: "Memory banks cleared. Resetting session context.", timestamp: new Date() }])} className="p-2.5 bg-white/5 hover:bg-white/10 rounded-xl transition-all"><RefreshCw className="w-4 h-4 text-white" /></button>
+              <button onClick={() => setIsOpen(false)} className="p-2.5 bg-white/5 hover:bg-white/10 rounded-xl transition-all"><Minus className="w-4 h-4 text-white" /></button>
+            </div>
           </div>
 
           {/* Neural Messages Area */}
           <div className="flex-1 overflow-y-auto p-6 bg-slate-50/30 space-y-6 no-scrollbar backdrop-blur-sm">
             {messages.map((msg, index) => (
               <div key={index} className={`flex flex-col ${msg.type === 'user' ? 'items-end' : 'items-start'} animate-reveal`}>
-                <div className={`max-w-[85%] p-4 rounded-3xl text-sm font-medium leading-relaxed shadow-sm ${
-                  msg.type === 'user' ? 'bg-sky-500 text-white rounded-tr-lg' : 'bg-white text-slate-700 border border-slate-100 rounded-tl-lg'
-                }`}>
+                <div className={`max-w-[85%] p-4 rounded-3xl text-sm font-medium leading-relaxed shadow-sm ${msg.type === 'user' ? 'bg-sky-500 text-white rounded-tr-lg' : 'bg-white text-slate-700 border border-slate-100 rounded-tl-lg'
+                  }`}>
                   {msg.text}
                 </div>
                 {msg.type === 'bot' && msg.recommendations?.length > 0 && (
@@ -157,9 +156,9 @@ const ChatbotWidget = () => {
             ))}
             {loading && (
               <div className="flex gap-2 p-4 bg-white/50 rounded-2xl border border-slate-100 w-fit">
-                 <div className="w-1.5 h-1.5 bg-sky-400 rounded-full animate-bounce" />
-                 <div className="w-1.5 h-1.5 bg-sky-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                 <div className="w-1.5 h-1.5 bg-sky-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+                <div className="w-1.5 h-1.5 bg-sky-400 rounded-full animate-bounce" />
+                <div className="w-1.5 h-1.5 bg-sky-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                <div className="w-1.5 h-1.5 bg-sky-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
               </div>
             )}
             <div ref={messagesEndRef} />
