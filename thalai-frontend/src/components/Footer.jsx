@@ -1,9 +1,9 @@
 import { Link } from 'react-router-dom';
 import { Droplets, Heart, Mail, Phone, Info, Globe, ShieldCheck } from 'lucide-react';
 
-const Footer = () => {
+const Footer = ({ className = '' }) => {
   return (
-    <footer className="bg-slate-950 text-white font-body">
+    <footer className={`bg-slate-950 text-white font-body ${className}`}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 lg:gap-8">
           {/* Brand Column */}
@@ -32,11 +32,16 @@ const Footer = () => {
           <div>
             <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-8">Navigation</h4>
             <ul className="space-y-4 text-sm font-bold text-slate-300">
-              {['Home', 'Donors', 'Requests', 'Emergency'].map(item => (
-                <li key={item}>
-                  <Link to={`/${item.toLowerCase()}`} className="hover:text-sky-400 transition-colors flex items-center gap-2 group">
+              {[
+                { name: 'Home', path: '/' },
+                { name: 'Donors', path: '/donors' },
+                { name: 'Requests', path: '/requests' },
+                { name: 'Emergency', path: '/requests' }
+              ].map(item => (
+                <li key={item.name}>
+                  <Link to={item.path} className="hover:text-sky-400 transition-colors flex items-center gap-2 group">
                     <span className="w-1.5 h-1.5 rounded-full bg-slate-800 bg-sky-400 scale-0 group-hover:scale-100 transition-all" />
-                    {item}
+                    {item.name}
                   </Link>
                 </li>
               ))}
@@ -48,16 +53,16 @@ const Footer = () => {
             <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-8">Resources</h4>
             <ul className="space-y-4 text-sm font-bold text-slate-300">
               {[
-                { name: 'Guidelines', icon: ShieldCheck },
-                { name: 'Predictive Care', icon: Info },
-                { name: 'Medical FAQ', icon: Info },
-                { name: 'Crisis Center', icon: Heart }
+                { name: 'Guidelines', icon: ShieldCheck, path: '/requests' },
+                { name: 'Predictive Care', icon: Info, path: '/' },
+                { name: 'Medical FAQ', icon: Info, path: '/' },
+                { name: 'Crisis Center', icon: Heart, path: '/requests' }
               ].map(item => (
                 <li key={item.name}>
-                  <a href="#" className="hover:text-sky-400 transition-colors flex items-center gap-2.5">
+                  <Link to={item.path} className="hover:text-sky-400 transition-colors flex items-center gap-2.5">
                     <item.icon className="w-4 h-4 text-slate-600" />
                     {item.name}
-                  </a>
+                  </Link>
                 </li>
               ))}
             </ul>

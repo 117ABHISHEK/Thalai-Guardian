@@ -4,6 +4,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Navigation from './components/Navbar';
 import Footer from './components/Footer';
 import ChatbotWidget from './components/ChatbotWidget';
+import BackgroundDecoration from './components/BackgroundDecoration';
 
 // Public Pages
 import HomeDashboard from './pages/HomeDashboard';
@@ -30,8 +31,8 @@ const Home = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-health-blue"></div>
+      <div className="min-h-screen bg-transparent flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-sky-500"></div>
       </div>
     );
   }
@@ -72,9 +73,10 @@ function App() {
   return (
     <AuthProvider>
       <Router>
-        <div className="min-h-screen flex flex-col">
+        <div className="min-h-screen flex flex-col relative bg-transparent">
+          <BackgroundDecoration />
           <Navigation />
-          <main className="flex-grow">
+          <main className="flex-grow w-full overflow-visible min-h-[70vh]">
             <Routes>
               {/* Public Routes */}
               <Route path="/" element={<Home />} />
@@ -160,6 +162,10 @@ function App() {
                 }
               />
               
+              {/* Redirects for links in Navbar/Footer */}
+              <Route path="/emergency" element={<Navigate to="/requests" replace />} />
+              <Route path="/settings" element={<Navigate to="/dashboard" replace />} />
+              
               {/* Generic dashboard route */}
               <Route path="/dashboard" element={<DashboardRoute />} />
               
@@ -167,7 +173,7 @@ function App() {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </main>
-          <Footer />
+          <Footer className="flex-shrink-0" />
           <ChatbotWidget />
         </div>
       </Router>

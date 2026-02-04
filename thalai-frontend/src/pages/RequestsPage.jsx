@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getPublicRequests } from '../api/public';
 import ChartCard from '../components/ChartCard';
 import TablePreview from '../components/TablePreview';
 import { Activity, ShieldAlert, CheckCircle2, Search, Clock, Droplets, ArrowRight } from 'lucide-react';
 
 const RequestsPage = () => {
+  const navigate = useNavigate();
   const [requestData, setRequestData] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -90,7 +92,7 @@ const RequestsPage = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="min-h-screen bg-transparent flex items-center justify-center">
         <div className="w-12 h-12 border-4 border-sky-100 border-t-sky-500 rounded-full animate-spin" />
       </div>
     );
@@ -109,7 +111,7 @@ const RequestsPage = () => {
   })) || [];
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] font-body py-20 pb-40">
+    <div className="min-h-screen bg-transparent font-body py-20 pb-40 animate-slide-up">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {/* Header Section */}
@@ -193,7 +195,7 @@ const RequestsPage = () => {
                  <p className="text-slate-500 font-medium">Your donation can close these pending requests today.</p>
               </div>
            </div>
-           <button className="btn-primary py-5 px-12 text-lg shadow-2xl shadow-sky-500/20 group">
+           <button onClick={() => navigate('/register')} className="btn-primary py-5 px-12 text-lg shadow-2xl shadow-sky-500/20 group">
               Become a Hero <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
            </button>
         </div>

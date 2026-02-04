@@ -526,6 +526,7 @@ const updateProfile = async (req, res) => {
       address,
       dateOfBirth,
       bloodGroup,
+      profilePicture,
       // Health metrics
       heightCm,
       weightKg,
@@ -542,6 +543,7 @@ const updateProfile = async (req, res) => {
     if (phone) updateFields.phone = phone;
     if (address) updateFields.address = address;
     if (dateOfBirth) updateFields.dateOfBirth = dateOfBirth;
+    if (profilePicture) updateFields.profilePicture = profilePicture;
     if (bloodGroup) {
       const validBloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
       if (validBloodGroups.includes(bloodGroup)) {
@@ -702,6 +704,16 @@ const triggerPrediction = async (req, res) => {
     const result = await updateTransfusionPrediction(patient._id);
     
     if (!result.success) {
+      if (result.error === 'No transfusion history') {
+        return res.status(200).json({
+          success: true,
+          message: 'Success: Add some records to start AI tracking',
+          data: {
+            predictionLastUpdated: new Date(),
+            explanation: 'Add transfusion records to get AI-powered predictions'
+          }
+        });
+      }
       return res.status(400).json({
         success: false,
         message: result.error || 'Failed to generate prediction',

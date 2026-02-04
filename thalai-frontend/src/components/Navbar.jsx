@@ -4,15 +4,44 @@ import {
   Droplets, LayoutDashboard, UserCircle, 
   LogOut, Bell, Settings, Menu, X,
   UserCheck, ClipboardList, Activity, Heart,
-  LogIn, UserPlus, Search
+  LogIn, UserPlus, Search, Calendar
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import NotificationDropdown from './NotificationDropdown';
+import { getNotifications } from '../api/notifications';
 
 const Navbar = () => {
   const { user, isAuthenticated, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchUnreadCount();
+      
+      const interval = setInterval(fetchUnreadCount, 30000); // 30s refresh
+      
+      // Listen for manual updates from other components
+      window.addEventListener('notificationsUpdated', fetchUnreadCount);
+      
+      return () => {
+        clearInterval(interval);
+        window.removeEventListener('notificationsUpdated', fetchUnreadCount);
+      };
+    }
+  }, [isAuthenticated]);
+
+  const fetchUnreadCount = async () => {
+    try {
+      const response = await getNotifications({ status: 'unread', limit: 1 });
+      setUnreadCount(response.data.total || 0);
+    } catch (err) {
+      console.error('Failed to fetch unread count');
+    }
+  };
 
   const isActive = (path) => location.pathname === path;
 
@@ -90,15 +119,33 @@ const Navbar = () => {
           <div className="hidden md:flex items-center gap-4">
             {isAuthenticated ? (
               <div className="flex items-center gap-4 pl-4 border-l border-slate-100">
-                <button className="p-2.5 text-slate-400 hover:text-sky-500 hover:bg-sky-50 rounded-xl transition-all relative">
-                  <Bell className="w-5 h-5" />
-                  <span className="absolute top-2.5 right-2.5 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-white" />
-                </button>
+                <div className="relative">
+                  <button 
+                    onClick={() => { setIsNotificationOpen(!isNotificationOpen); setIsMobileMenuOpen(false); }}
+                    className={`p-2.5 rounded-xl transition-all relative ${isNotificationOpen ? 'text-sky-500 bg-sky-50' : 'text-slate-400 hover:text-sky-500 hover:bg-sky-50'}`}
+                  >
+                    <Bell className="w-5 h-5" />
+                    {unreadCount > 0 && (
+                      <span className="absolute top-2.5 right-2.5 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-white animate-pulse" />
+                    )}
+                  </button>
+
+                  {isNotificationOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setIsNotificationOpen(false)} />
+                      <NotificationDropdown onClose={() => setIsNotificationOpen(false)} />
+                    </>
+                  )}
+                </div>
                 
                 <div className="relative group">
                   <button className="flex items-center gap-3 p-1.5 pr-4 bg-slate-50 border border-slate-100 rounded-2xl group-hover:bg-white group-hover:border-sky-200 transition-all">
-                    <div className="w-9 h-9 rounded-xl bg-sky-500 flex items-center justify-center text-white shadow-lg shadow-sky-500/20">
-                       <UserCircle className="w-6 h-6" />
+                    <div className="w-9 h-9 rounded-xl bg-sky-500 flex items-center justify-center text-white shadow-lg shadow-sky-500/20 overflow-hidden">
+                       {user.profilePicture ? (
+                         <img src={user.profilePicture} alt={user.name} className="w-full h-full object-cover" />
+                       ) : (
+                         <UserCircle className="w-6 h-6" />
+                       )}
                     </div>
                     <div className="text-left">
                       <p className="text-xs font-black text-slate-900 leading-none mb-1">{user.name.split(' ')[0]}</p>
@@ -107,7 +154,7 @@ const Navbar = () => {
                   </button>
                   
                   {/* Dropdown */}
-                  <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-[24px] shadow-2xl border border-slate-100 p-2.5 opacity-0 translate-y-3 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto transition-all">
+                  <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-[24px] shadow-2xl border border-slate-100 p-2.5 opacity-0 translate-y-3 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto transition-all z-[9999]">
                     <div className="px-4 py-3 border-b border-slate-50 mb-1">
                        <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">Signed in as</p>
                        <p className="text-sm font-bold text-slate-900 truncate">{user.email}</p>
@@ -115,7 +162,7 @@ const Navbar = () => {
                     <button onClick={() => navigate(`/${user.role}-dashboard`)} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-all">
                       <LayoutDashboard className="w-4 h-4" /> My Dashboard
                     </button>
-                    <button onClick={() => navigate('/settings')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-all">
+                    <button onClick={() => navigate(`/${user.role}-dashboard`)} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-all">
                       <Settings className="w-4 h-4" /> Account Settings
                     </button>
                     <div className="h-[1px] bg-slate-50 my-1.5 mx-2" />
@@ -138,7 +185,10 @@ const Navbar = () => {
           </div>
 
           {/* Mobile Menu Button */}
-          <div className="md:hidden">
+          <div className="md:hidden flex items-center gap-2">
+             {isAuthenticated && unreadCount > 0 && (
+               <div className="w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse mr-1" />
+             )}
              <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-2.5 text-slate-600 bg-slate-50 rounded-xl active:scale-95 transition-all">
                 {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
              </button>
@@ -170,6 +220,22 @@ const Navbar = () => {
                   {link.name}
                 </Link>
               ))}
+              
+              {isAuthenticated && (
+                <Link
+                  to={`/${user.role}-dashboard?tab=notifications`}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className={`flex items-center justify-between px-5 py-4 rounded-[20px] text-lg font-bold transition-all text-slate-600 hover:bg-slate-50`}
+                >
+                  <div className="flex items-center gap-4">
+                    <Bell className="w-6 h-6" />
+                    Neural Signals
+                  </div>
+                  {unreadCount > 0 && (
+                    <span className="px-2.5 py-1 bg-rose-500 text-white text-[10px] font-black rounded-full shadow-lg shadow-rose-500/20">{unreadCount}</span>
+                  )}
+                </Link>
+              )}
               
               <div className="pt-8 mt-8 border-t border-slate-100 flex flex-col gap-4">
                 {isAuthenticated ? (
