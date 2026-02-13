@@ -1,0 +1,30 @@
+services:
+  # 🚀 ONE SINGLE DEPLOYMENT (All-in-one Container)
+  - type: web
+    name: thalai-guardian-all-in-one
+    env: docker
+    plan: starter # Docker requires at least Starter plan on Render for reliability
+    envVars:
+      - fromGroup: thalai-global-secrets
+      - key: PORT
+        value: 5000
+      - key: AI_SERVICE_URL
+        value: http://localhost:8000
+      - key: NODE_ENV
+        value: production
+      - key: SERVE_FRONTEND
+        value: "true"
+
+envVarGroups:
+  - name: thalai-global-secrets
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_PASS
+        sync: false
