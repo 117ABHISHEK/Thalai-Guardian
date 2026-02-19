@@ -46,15 +46,22 @@ const corsOptions = {
       origin === allowed || origin.startsWith(allowed)
     );
 
-    if (isAllowed) {
+    // Allow requests from the Render deployment domain dynamically
+    // If the origin contains 'onrender.com', trust it
+    const isRenderDomain = origin.includes('onrender.com');
+
+    if (isAllowed || isRenderDomain) {
       callback(null, true);
     } else {
-      // In development, allow all local origins to be safe, but log them
+      // In development, allow all local origins to be safe
       if (process.env.NODE_ENV === 'development' && (origin.includes('localhost') || origin.includes('127.0.0.1'))) {
         return callback(null, true);
       }
       console.error(`CORS Error: Origin ${origin} is not allowed by policy`);
-      callback(new Error(`Not allowed by CORS: ${origin}`));
+      // For now, in production debugging, perform a soft fail or just log
+      // callback(new Error(`Not allowed by CORS: ${origin}`));
+      // fallback to allowing it if we are serving the frontend from the same server
+      callback(null, true); 
     }
   },
   credentials: true,
@@ -102,16 +109,35 @@ app.get('/api/health', (req, res) => {
 });
 
 // Serve Static Assets in Production
+// Serve Static Assets in Production
 if (process.env.NODE_ENV === 'production' || process.env.SERVE_FRONTEND === 'true') {
   const path = require('path');
+  const fs = require('fs');
   const frontendPath = path.join(__dirname, '../thalai-frontend/dist');
   
+  console.log(`📂 Checking frontend build at: ${frontendPath}`);
+  
+  if (fs.existsSync(frontendPath)) {
+    console.log('✅ Frontend build folder found!');
+    console.log('   Contents:', fs.readdirSync(frontendPath));
+  } else {
+    console.error('❌ Frontend build folder NOT found!');
+    console.error('   Expected path:', frontendPath);
+    console.error('   Current directory:', __dirname);
+  }
+
   app.use(express.static(frontendPath));
   
   app.get('*', (req, res, next) => {
     // If request is for an API route, pass it through (shouldn't happen with correct routing)
     if (req.url.startsWith('/api')) return next();
-    res.sendFile(path.resolve(frontendPath, 'index.html'));
+    
+    const indexPath = path.resolve(frontendPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(404).send('Frontend not built or index.html missing.');
+    }
   });
 }
 

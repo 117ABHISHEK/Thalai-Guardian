@@ -4,8 +4,9 @@ const Donor = require("../models/donorModel");
 const { getPredictionStatus } = require("../utils/aiPrediction");
 
 // Initialize Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+// Initialize at top-level but allow re-initialization if needed
+let genAI;
+let model;
 
 const SYSTEM_PROMPT = `You are ThalAI Guardian, a specialized AI assistant for Thalassemia patients and blood donors. 
 Your goal is to provide accurate, empathetic, and helpful information about Thalassemia.
@@ -23,13 +24,13 @@ Guidelines:
 
 const responses = {
   greetings: {
-    patterns: ['hi', 'hello', 'hey', 'start', 'greetings', 'who are you', 'how are you'],
-    response: (name) => `Hello ${name}! I'm your ThalAI Guardian assistant. I'm here to support you as a member of our community.
-
+    patterns: ['hi', 'hello', 'hey', 'start', 'greetings', 'who are you', 'how are you', 'helo', 'hii', 'hy'],
+    response: (name) => `Hello ${name}! I'm your ThalAI Guardian assistant. I'm here to support you with any questions about Thalassemia or blood donation.
+    
 How can I help you today?`,
   },
   thanks: {
-    patterns: ['thanks', 'thank you', 'ok', 'alright', 'bye', 'goodbye', 'thx', 'thnk', 'tks', 'cool', 'great'],
+    patterns: ['thanks', 'thank you', 'ok', 'alright', 'bye', 'goodbye', 'thx', 'thnk', 'tks', 'cool', 'great', 'thanks for help'],
     response: (name) => `You're very welcome, ${name}! If you have more questions later, I'm always here to help. Stay healthy! (⊙ˍ⊙)`,
   },
   appointment: {
@@ -57,7 +58,7 @@ Current counts:
 Would you like to go to your request history?`,
   },
   thalassemia_info: {
-    patterns: ['what is', 'thalassemia', 'definition', 'causes', 'inherited', 'genetic'],
+    patterns: ['thalassemia', 'definition', 'causes', 'inherited', 'genetic', 'it', 'condition'],
     response: `Thalassemia is an inherited blood disorder where the body makes an abnormal form of hemoglobin. Hemoglobin is the protein in red blood cells that carries oxygen.
 
 Key concepts:
@@ -216,7 +217,7 @@ For blood requirement, create an urgent request on ThalAI Guardian.`,
 
 🔍 FIND DONORS:
 • System automatically matches donors
-• View matches in "Request History"
+• View matches in "Request History" section
 • Top matches are notified automatically
 
 👤 FOR DONORS:
@@ -234,17 +235,13 @@ Need more help? Contact admin support.`,
   },
   general: {
     patterns: [],
-    response: `I'm not sure I fully understand that. However, I can help you with:
-
-• Transfusion schedules
-• Donor guidelines
-• Thalassemia information
-• Iron overload & Chelation
-• Diet advice
-• Symptoms information
-• Emergency support
-
-What would you like to know?`,
+    response: `I'm here to support you with Thalassemia management and blood donation. 
+    
+It seems I didn't quite catch that. Could you try rephrasing or asking about:
+• Thalassemia symptoms or schedules
+• Donor guidelines & eligibility
+• Diet and iron overload advice
+• Emergency support`,
   },
 };
 
@@ -255,12 +252,15 @@ const detectIntent = (message) => {
   const lowerMessage = message.toLowerCase().trim();
   
   // Special handling for legacy/short words
-  if (lowerMessage === 'how') return 'system_help';
+  if (lowerMessage === 'how' || lowerMessage.includes('how to use')) return 'system_help';
   if (['thx', 'ok', 'bye'].includes(lowerMessage)) return 'thanks';
+
+  // Specific check for info to avoid overriding casual questions
+  if (lowerMessage.includes('what is thalassemia') || lowerMessage.includes('tell me about thalassemia')) return 'thalassemia_info';
 
   // Check each intent
   for (const [intent, data] of Object.entries(responses)) {
-    if (intent === 'general') continue;
+    if (intent === 'general' || intent === 'thalassemia_info') continue;
     
     for (const pattern of data.patterns) {
       const regex = new RegExp(`\\b${pattern}\\b`, 'i');
@@ -269,6 +269,10 @@ const detectIntent = (message) => {
       }
     }
   }
+
+  // Fallback to thalassemia_info ONLY if keywords present (since it's the main topic)
+  const thalassemiaKeywords = ['thalassemia', 'genetic', 'hemoglobin', 'inherited'];
+  if (thalassemiaKeywords.some(k => lowerMessage.includes(k))) return 'thalassemia_info';
   
   return 'general';
 };
@@ -296,6 +300,7 @@ const generateResponse = async (message, user = null, history = []) => {
         if (prediction.success && prediction.prediction.predictedDate) {
           clinicalContext += `\n- Next Transfusion Prediction (from AI Service): ${new Date(prediction.prediction.predictedDate).toDateString()}`;
           clinicalContext += `\n- Confidence: ${(prediction.prediction.confidence * 100).toFixed(0)}%`;
+          clinicalContext += `\n- Urgency: ${prediction.prediction.urgency.toUpperCase()}`;
           clinicalContext += `\n- AI Explanation: ${prediction.prediction.explanation}`;
         }
       } else if (role.toLowerCase() === 'donor' && (intent === 'donor_guidelines' || intent === 'general')) {
@@ -318,49 +323,153 @@ const generateResponse = async (message, user = null, history = []) => {
   let confidence = 0.85;
 
   // Use Gemini if available to provide a smarter, contextual response
-  const apiKey = process.env.GEMINI_API_KEY;
+  const rawApiKey = process.env.GEMINI_API_KEY;
+  const apiKey = rawApiKey ? rawApiKey.trim() : null;
   const isApiConfigured = apiKey && apiKey.length > 10 && apiKey !== 'your_gemini_api_key_here';
+
+  if (!isApiConfigured) {
+    console.log('🤖 Chatbot: Gemini API Key missing or too short. Key Start:', apiKey ? apiKey.substring(0, 4) : 'NULL');
+  }
 
   if (isApiConfigured) {
     try {
-      const historyContext = history.length > 0 
-        ? history.map(h => `User: ${h.userMessage}\nAssistant: ${h.botResponse}`).join('\n')
-        : 'No previous history in this session.';
+      const axios = require('axios');
+      if (!genAI) {
+        const { GoogleGenerativeAI } = require("@google/generative-ai");
+        genAI = new GoogleGenerativeAI(apiKey);
+        console.log(`🤖 Chatbot: SDK Initialized (Key: ${apiKey.substring(0, 8)}...)`);
+        
+        // Scout for allowed models to debug 404s
+        try {
+          const scout = await axios.get(`https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`);
+          const models = scout.data.models ? scout.data.models.map(m => m.name.replace('models/', '')) : [];
+          console.log('📡 [SCOUT] Models allowed for this key:', models.join(', '));
+        } catch (sErr) {
+          console.error('📡 [SCOUT] Failed to list models:', sErr.response?.data?.error?.message || sErr.message);
+        }
+      }
 
-      const prompt = `
+      // Dynamic Discovery: Use models found by Scout first
+      let scoutedModelNames = [];
+      try {
+        const scout = await axios.get(`https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`);
+        scoutedModelNames = scout.data.models ? scout.data.models.map(m => m.name.replace('models/', '')) : [];
+        if (scoutedModelNames.length > 0) {
+          console.log(`📡 [DYNAMIC] Trying scouted models: ${scoutedModelNames.slice(0, 3).join(', ')}`);
+        }
+      } catch (e) {
+        console.warn('Scout failed, using defaults.');
+      }
+
+      // Exhaustive list - Prioritizing models the Scout actually found
+      const attempts = [];
+      
+      // Add scouted models to the top of the list
+      scoutedModelNames.slice(0, 3).forEach(m => {
+        attempts.push({ model: m, version: "v1" });
+        attempts.push({ model: m, version: "v1beta" });
+      });
+
+      // Standard search if scout found nothing or top few fail
+      attempts.push(
+        { model: "gemini-2.0-flash", version: "v1" },
+        { model: "gemini-1.5-flash", version: "v1" },
+        { model: "gemini-pro", version: "v1" }
+      );
+      
+      let lastError = null;
+
+      for (const attempt of attempts) {
+        try {
+          const currentModel = genAI.getGenerativeModel(
+            { model: attempt.model },
+            { apiVersion: attempt.version }
+          );
+          
+          const historyContext = history.length > 0 
+            ? history.map(h => `User: ${h.userMessage}\nAssistant: ${h.botResponse}`).join('\n')
+            : 'No previous history in this session.';
+
+          // If intent is general, don't force it to use the "didn't catch that" text as the source of truth
+          const isGeneral = intent === 'general';
+          const promptBaseInfo = isGeneral 
+            ? "No specific thalassemia fact found for this query." 
+            : `RELIABLE FACT: "${baseKnowledge}"`;
+
+          const prompt = `
 Context:
 - Platform: ThalAI Guardian (Thalassemia Support Platform)
 - User Name: ${userName}
 - User Role: ${role}
 - Identified Topic: ${intent.replace('_', ' ')}
-- Reliable Base Info: "${baseKnowledge}"
+- ${promptBaseInfo}
 ${clinicalContext ? `- USER CLINICAL DATA: ${clinicalContext}` : ""}
 
-Recent Chat History:
+Recent History:
 ${historyContext}
 
-Current User Message: "${message}"
+Current Message: "${message}"
 
 ${SYSTEM_PROMPT}
 
 Task:
-Answer the current user message using the context and history.
-1. Be direct and helpful.
-2. Use the "Reliable Base Info" for ThalAI specific facts.
-3. If this is a follow-up question (check history), ensure your answer is contextual.
-4. Formatting: Use bold and lists where appropriate.
+1. If the message is a general query (like "what is a cat" or "who made you"), answer it directly but keep it brief.
+2. If it's medical or platform-specific, use the "RELIABLE FACT" and platform context.
+3. Be professional and empathetic.
 `;
-      const result = await model.generateContent(prompt);
-      response = result.response.text();
-      confidence = 0.98;
+          const result = await currentModel.generateContent(prompt);
+          response = result.response.text();
+          confidence = 0.98;
+          
+          console.log(`✅ Chatbot Connected! Using ${attempt.model} (${attempt.version})`);
+          break; 
+        } catch (err) {
+          lastError = err;
+          console.warn(`⚠️ Attempt failed: ${attempt.model} on ${attempt.version}`);
+          continue; 
+        }
+      }
+
+      // --- PHASE 3: RAW HTTP FALLBACK (Only if Phase 2 failed) ---
+      if (!response) {
+        console.log('🔄 Chatbot: SDK failed. Attempting Raw HTTP Fallback...');
+        
+        for (const attempt of attempts) {
+          try {
+            const restUrl = `https://generativelanguage.googleapis.com/${attempt.version}/models/${attempt.model}:generateContent?key=${apiKey}`;
+            
+            const restPayload = {
+              contents: [{
+                parts: [{ text: `${SYSTEM_PROMPT}\n\nContext: ${baseKnowledge}\n\nUser: ${message}` }]
+              }],
+              generationConfig: { temperature: 0.7, maxOutputTokens: 500 }
+            };
+
+            const restResponse = await axios.post(restUrl, restPayload);
+            
+            if (restResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+              response = restResponse.data.candidates[0].content.parts[0].text;
+              confidence = 0.95;
+              console.log(`🚀 [REST SUCCESS] Connected via Raw HTTP using ${attempt.model} (${attempt.version})`);
+              break;
+            }
+          } catch (restErr) {
+            console.warn(`❌ REST Attempt failed for ${attempt.model}:`, restErr.response?.data?.error?.message || restErr.message);
+          }
+        }
+      }
+
+      if (!response && lastError) throw lastError;
+
     } catch (error) {
-      console.error('Gemini API Error:', error);
+      console.error('❌ Gemini Exhaustive Search Failed:', error.message);
+      if (error.message.includes('404')) {
+        console.error('🚨 [CRITICAL] 404 NOT FOUND: Your key is not authorized for Generative AI. PLEASE use AI Studio (aistudio.google.com).');
+      }
       response = baseKnowledge;
       confidence = 0.5;
     }
   } else {
-    // Fallback to static response if no API key
-    console.log('Gemini API not configured or key is placeholder. Using static response.');
     response = baseKnowledge;
   }
   
