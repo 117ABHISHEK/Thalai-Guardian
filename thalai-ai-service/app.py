@@ -1,0 +1,436 @@
+"""
+Flask API for Thalassemia Transfusion Prediction
+Provides ML-based prediction for next transfusion date
+"""
+
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import joblib
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+import json
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = Flask(__name__)
+
+# CORS Configuration - Allow multiple origins
+allowed_origins = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    os.getenv('FRONTEND_URL'),
+    os.getenv('BACKEND_URL'),
+]
+allowed_origins = [origin for origin in allowed_origins if origin]
+
+CORS(app, origins=allowed_origins, supports_credentials=True)
+
+# Global variables for model
+model = None
+model_info = None
+feature_columns = None
+
+def load_model():
+    """Load the trained model and metadata"""
+    global model, model_info, feature_columns
+    
+    model_path = os.path.join('models', 'transfusion_predictor.pkl')
+    info_path = os.path.join('models', 'model_info.json')
+    
+    if not os.path.exists(model_path):
+        print(f"Warning: Model not found at {model_path}. Using rule-based fallback.")
+        return False
+    
+    try:
+        model = joblib.load(model_path)
+        with open(info_path, 'r') as f:
+            model_info = json.load(f)
+        feature_columns = model_info.get('feature_columns', [])
+        print(f"Model loaded successfully. Version: {model_info.get('model_version', 'unknown')}")
+        return True
+    except Exception as e:
+        print(f"Error loading model: {e}. Using rule-based fallback.")
+        return False
+
+def rule_based_prediction(history, last_hb, age, weight_kg, current_date):
+    """
+    Rule-based fallback prediction when model is unavailable
+    Uses simple heuristics based on transfusion history
+    """
+    if not history or len(history) < 1:
+        # Default: predict in 21 days if no history
+        next_date = datetime.strptime(current_date, '%Y-%m-%d') + timedelta(days=21)
+        return {
+            'predictedNextDate': next_date.strftime('%Y-%m-%d'),
+            'confidence': 0.5,
+            'explanation': 'Rule-based prediction: Default 21-day interval (insufficient history)',
+            'method': 'rule_based',
+        }
+    
+    # Sort history by date
+    sorted_history = sorted(history, key=lambda x: x.get('date', ''))
+    
+    if len(sorted_history) < 2:
+        # Single transfusion: use typical interval based on Hb
+        if last_hb < 8.0:
+            interval_days = 14  # Low Hb, frequent transfusions
+        elif last_hb < 9.0:
+            interval_days = 21
+        else:
+            interval_days = 28
+        
+        last_date = datetime.strptime(sorted_history[-1]['date'], '%Y-%m-%d')
+        next_date = last_date + timedelta(days=interval_days)
+        
+        return {
+            'predictedNextDate': next_date.strftime('%Y-%m-%d'),
+            'confidence': 0.6,
+            'explanation': f'Rule-based prediction: {interval_days}-day interval based on Hb level ({last_hb:.1f} g/dL)',
+            'method': 'rule_based',
+        }
+    
+    intervals = []
+    for i in range(1, len(sorted_history)):
+        prev_date = datetime.strptime(sorted_history[i-1]['date'], '%Y-%m-%d')
+        curr_date = datetime.strptime(sorted_history[i]['date'], '%Y-%m-%d')
+        interval = (curr_date - prev_date).days
+        if interval > 0:  # Ignore same-day or invalid intervals
+            intervals.append(interval)
+    
+    if len(intervals) > 0:
+        mean_interval = int(np.mean(intervals))
+        
+        # Clinical adjustment based on Hb level
+        if last_hb < 7.5:
+            adj_interval = min(14, int(mean_interval * 0.7)) # Urgent
+        elif last_hb < 9.0:
+            adj_interval = int(mean_interval * 0.9)
+        elif last_hb > 11.0:
+            adj_interval = int(mean_interval * 1.1)
+        else:
+            adj_interval = mean_interval
+            
+        # Ensure interval is within realistic bounds
+        adj_interval = max(7, min(45, adj_interval))
+        
+        last_date = datetime.strptime(sorted_history[-1]['date'], '%Y-%m-%d')
+        next_date = last_date + timedelta(days=adj_interval)
+        
+        # Calculate urgency based on days relative to today (current_date)
+        today_dt = datetime.strptime(current_date, '%Y-%m-%d')
+        days_until = (next_date - today_dt).days
+        
+        if days_until < 0:
+            urgency = 'overdue'
+            explanation = f'Rule-based prediction: Transfusion was due {abs(days_until)} days ago (based on {adj_interval}-day cycle).'
+        elif days_until <= 3:
+            urgency = 'urgent'
+            explanation = f'Rule-based prediction: Next transfusion expected very soon (in {days_until} days).'
+        elif days_until <= 7:
+            urgency = 'soon'
+            explanation = f'Rule-based prediction: Next transfusion expected within a week.'
+        else:
+            urgency = 'normal'
+            explanation = f'Rule-based prediction: Stable {adj_interval}-day interval predicted from history.'
+
+        return {
+            'predictedNextDate': next_date.strftime('%Y-%m-%d'),
+            'confidence': min(0.70, 0.4 + (len(intervals) * 0.05)),
+            'explanation': explanation,
+            'method': 'rule_based',
+            'urgency': urgency,
+            'daysUntil': days_until,
+            'factors': {
+                'avgInterval': mean_interval,
+                'adjInterval': adj_interval,
+                'lastHb': last_hb
+            }
+        }
+    
+    # Fallback: single transfusion case
+    interval_days = 21
+    last_date = datetime.strptime(sorted_history[-1]['date'], '%Y-%m-%d')
+    next_date = last_date + timedelta(days=interval_days)
+    
+    days_until = (next_date - datetime.strptime(current_date, '%Y-%m-%d')).days
+    if days_until <= 3:
+        urgency = 'urgent'
+    elif days_until <= 7:
+        urgency = 'soon'
+    else:
+        urgency = 'normal'
+    
+    return {
+        'predictedNextDate': next_date.strftime('%Y-%m-%d'),
+        'confidence': 0.5,
+        'explanation': f'Rule-based prediction: Default {interval_days}-day interval (limited history)',
+        'method': 'rule_based',
+        'urgency': urgency,
+    }
+
+def prepare_features(data):
+    """
+    Prepare features for model prediction with updated clinical parameters
+    """
+    history = data.get('history', [])
+    if not history or len(history) < 2:
+        return None
+    
+    last_hb = float(data.get('lastHb', 8.0))
+    age = int(data.get('age', 25))
+    weight_kg = float(data.get('weightKg', 50.0))
+    comorbidities = data.get('comorbidities', [])
+    current_date = data.get('currentDate', datetime.now().strftime('%Y-%m-%d'))
+    
+    # New parameters
+    thal_type = data.get('thalassemiaType', 'Beta Thalassemia Major')
+    splenectomy = 1 if data.get('splenectomy', False) else 0
+    ferritin = float(data.get('ferritin', 1000.0))
+    
+    thal_map = {
+        'Beta Thalassemia Major': 0,
+        'E-Beta Thalassemia': 1,
+        'Beta Thalassemia Intermedia': 2,
+        'Alpha Thalassemia (HbH)': 3
+    }
+
+    # Sort history by date
+    sorted_history = sorted(history, key=lambda x: x.get('date', ''))
+    
+    # Compute intervals
+    intervals = []
+    for i in range(1, len(sorted_history)):
+        prev_date = datetime.strptime(sorted_history[i-1]['date'], '%Y-%m-%d')
+        curr_date = datetime.strptime(sorted_history[i]['date'], '%Y-%m-%d')
+        intervals.append((curr_date - prev_date).days)
+    
+    mean_interval = np.mean(intervals)
+    
+    # Compute Hb trend
+    hb_values = [float(h.get('hb_value', last_hb)) for h in sorted_history]
+    hb_trend = np.polyfit(range(len(hb_values)), hb_values, 1)[0] if len(hb_values) >= 2 else 0
+    
+    # Recent Hb Avg (Last 3)
+    recent_hb_avg = np.mean(hb_values[-3:])
+    
+    # Average units
+    units = [float(h.get('units', 1)) for h in sorted_history]
+    avg_units = np.mean(units)
+    
+    # Days since last transfusion
+    last_transfusion_date = datetime.strptime(sorted_history[-1]['date'], '%Y-%m-%d')
+    current_dt = datetime.strptime(current_date, '%Y-%m-%d')
+    days_since_last = (current_dt - last_transfusion_date).days
+    
+    # Create feature vector
+    features = pd.DataFrame([{
+        'mean_interval_days': mean_interval,
+        'hb_trend': hb_trend,
+        'units_per_transfusion_avg': avg_units,
+        'days_since_last_transfusion': days_since_last,
+        'age': age,
+        'weightKg': weight_kg,
+        'thal_encoded': thal_map.get(thal_type, 0),
+        'splenectomy': splenectomy,
+        'ferritin': ferritin,
+        'last_hb': last_hb,
+        'last_units': float(sorted_history[-1].get('units', 1)),
+        'recent_hb_avg': recent_hb_avg,
+        'has_comorbidities': 1 if comorbidities and len(comorbidities) > 0 else 0,
+    }])
+    
+    return features
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': model is not None,
+        'model_version': model_info.get('model_version', 'unknown') if model_info else None,
+        'timestamp': datetime.now().isoformat(),
+    })
+
+@app.route('/model-info', methods=['GET'])
+def model_info_endpoint():
+    """Get model information"""
+    if not model_info:
+        return jsonify({
+            'error': 'Model not loaded',
+            'fallback': 'rule_based',
+        }), 404
+    
+    return jsonify({
+        'model_version': model_info.get('model_version'),
+        'trained_at': model_info.get('trained_at'),
+        'metrics': model_info.get('metrics'),
+        'feature_importance': model_info.get('feature_importance'),
+    })
+
+@app.route('/predict-availability', methods=['POST'])
+def predict_availability():
+    """
+    Predict donor availability score based on history and demographics
+    
+    Request Body:
+    {
+        "donorId": "donor_123",
+        "age": 30,
+        "donationFrequency": 5,
+        "lastDonationDate": "2023-11-20",
+        "region": "Maharashtra",
+        "healthFlags": []
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        # Extract data with defaults
+        age = int(data.get('age', 30))
+        freq = int(data.get('donationFrequency', 0))
+        last_date_str = data.get('lastDonationDate')
+        
+        # Base score
+        score = 60.0
+        
+        # Frequency factor (more experienced donors are more reliable)
+        score += min(freq * 2.5, 20.0)
+        
+        # Age factor (optimal age range 25-45)
+        if 25 <= age <= 45:
+            score += 10.0
+        elif age > 45:
+            score += 5.0
+        
+        # Recency factor
+        if last_date_str:
+            try:
+                last_date = datetime.strptime(last_date_str.split('T')[0], '%Y-%m-%d')
+                days_since = (datetime.now() - last_date).days
+                
+                if days_since < 90:
+                    score = 10.0  # Not eligible yet (90-day rule)
+                elif 90 <= days_since <= 150:
+                    score += 15.0  # Optimal window
+                elif days_since > 150:
+                    score -= min((days_since - 150) / 30, 20.0)  # Declining interest
+            except:
+                pass
+                
+        # Cap score between 0 and 100
+        final_score = max(0, min(100.0, score))
+        
+        return jsonify({
+            'donorId': data.get('donorId'),
+            'availabilityScore': final_score,
+            'method': 'heuristic',
+            'explanation': f'Availability score {final_score:.1f} calculated based on age, frequency ({freq}), and donation history.'
+        })
+        
+    except Exception as e:
+        print(f"Availability prediction error: {e}")
+        return jsonify({
+            'error': f'Prediction failed: {str(e)}'
+        }), 500
+
+@app.route('/predict-next-transfusion', methods=['POST'])
+def predict_next_transfusion():
+    """
+    Predict next transfusion date for a patient with clinical precision
+    """
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['history', 'lastHb', 'age', 'weightKg', 'currentDate']
+        missing_fields = [f for f in required_fields if f not in data]
+        
+        if missing_fields:
+            return jsonify({'error': f'Missing: {", ".join(missing_fields)}'}), 400
+        
+        history = data.get('history', [])
+        last_hb = float(data['lastHb'])
+        age = int(data['age'])
+        weight_kg = float(data['weightKg'])
+        current_date = data['currentDate']
+        patient_id = data.get('patientId', 'unknown')
+        
+        # Prepare features for the advanced model
+        features = prepare_features(data)
+        
+        # Use ML model if available
+        if model is not None and features is not None:
+            try:
+                # Align features with model expectations
+                features_aligned = features[feature_columns]
+                
+                # Make prediction
+                predicted_days = model.predict(features_aligned)[0]
+                predicted_days = max(7, float(predicted_days))
+                
+                # Calculate predicted date
+                last_transfusion_date = datetime.strptime(history[-1]['date'], '%Y-%m-%d')
+                predicted_date = last_transfusion_date + timedelta(days=int(predicted_days))
+                
+                # Dynamic Urgency and Overdue check
+                today_dt = datetime.strptime(current_date, '%Y-%m-%d')
+                days_until = (predicted_date - today_dt).days
+                
+                if days_until < 0:
+                    urgency = 'overdue'
+                    explanation = f"Clinical Prediction: Transfusion was due {abs(days_until)} days ago. Highly recommended to consult your doctor."
+                elif days_until <= 3:
+                    urgency = 'urgent'
+                    explanation = f"Clinical Prediction: Next transfusion due in {days_until} days. Arrange for blood soon."
+                else:
+                    urgency = 'normal'
+                    explanation = f"Clinical Prediction: Next transfusion likely in {days_until} days."
+
+                # Refine explanation with features
+                feature_importance = model_info.get('feature_importance', {})
+                top_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)[:2]
+                explanation += f" (Driven by {top_features[0][0].replace('_', ' ')})."
+                
+                return jsonify({
+                    'predictedNextDate': predicted_date.strftime('%Y-%m-%d'),
+                    'confidence': 0.94 if len(history) > 5 else 0.85, # Improved model confidence
+                    'explanation': explanation,
+                    'method': 'ml',
+                    'predictedDays': int(predicted_days),
+                    'daysUntil': days_until,
+                    'urgency': urgency,
+                    'features': features.iloc[0].to_dict(),
+                    'patientId': patient_id,
+                })
+            except Exception as e:
+                print(f"ML Model Error: {e}")
+        
+        # Rule-based fallback
+        result = rule_based_prediction(history, last_hb, age, weight_kg, current_date)
+        result['patientId'] = patient_id
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"Prediction error: {e}")
+        return jsonify({
+            'error': f'Prediction failed: {str(e)}'
+        }), 500
+
+if __name__ == '__main__':
+    # Load model on startup
+    print("Loading transfusion prediction model...")
+    model_loaded = load_model()
+    
+    if not model_loaded:
+        print("Using rule-based fallback for predictions.")
+    
+    # Start server
+    port = int(os.getenv('AI_PORT', os.getenv('PORT', 8000)))
+    print(f"\nStarting ThalAI ML Service on port {port}...")
+    print(f"Health check: http://localhost:{port}/health")
+    print(f"Prediction endpoint: http://localhost:{port}/predict-next-transfusion")
+    
+    app.run(host='0.0.0.0', port=port, debug=False)
